@@ -12,7 +12,6 @@ except:
 from functools import partial
 import sys
 import time
-from libMobility import DPStokes
 #import matplotlib.pyplot as plt
 
 from numba import jit, njit, prange
@@ -133,7 +132,7 @@ def nb_put_r_vecs_in_periodic_box(r_vecs_np, L, Nb):
                     r_vecs[k,i] -= L[i]
     return r_vecs
 
-def Update_Bodies_With_Hydro(r_vecs_np, W_old, FT_calc, D, periodic_length, kT, dt, vx, vy, bodies, offsets, list_of_neighbors, solver):
+def Update_Bodies_With_Hydro(r_vecs_np, W_old, FT_calc, periodic_length, kT, dt, bodies, offsets, list_of_neighbors, solver):
     '''
     Calculate Brownian Dynamics WITH hydro
     '''
@@ -151,7 +150,7 @@ def Update_Bodies_With_Hydro(r_vecs_np, W_old, FT_calc, D, periodic_length, kT, 
 
     return r_new, W_old
 
-def Update_Bodies_No_Hydro_2D(r_vecs_np, W_old, FT_calc, D, periodic_length, kT, dt, vx, vy, bodies, offsets, list_of_neighbors, solver):
+def Update_Bodies_No_Hydro_2D(r_vecs_np, W_old, FT_calc, D, periodic_length, kT, dt, vx, vy, bodies, offsets, list_of_neighbors):
     '''
     Calculate Brownian Dynamics without hydro in 2D given a diffusion coeficient D
     '''
@@ -186,7 +185,7 @@ def Update_Bodies_No_Hydro_2D(r_vecs_np, W_old, FT_calc, D, periodic_length, kT,
     F_new = Calc_F(r_vecs, FT_calc, bodies, offsets, list_of_neighbors)
     end = time.time()
     #print(np.linalg.norm(F_new))
-    print('F eval : ' + str((end - start)))
+    # print('F eval : ' + str((end - start)))
     ####################
     start = time.time()
     if W_old is None:
@@ -196,10 +195,10 @@ def Update_Bodies_No_Hydro_2D(r_vecs_np, W_old, FT_calc, D, periodic_length, kT,
     r_new = EM_Step(r_vecs_np,Win,F_new,D,kT,dt,vx,vy,Nb) #this should be r_vecs, not r_out!!!
     W_old = Wp
     end = time.time()
-    print('evolve rvecs : ' + str((end - start)))
+    # print('evolve rvecs : ' + str((end - start)))
     #################################################################################
 
-    print('*performace mode* - no error or jump checks!!')
+    # print('*performace mode* - no error or jump checks!!')
 
     return r_new, W_old
 
@@ -241,9 +240,11 @@ def go(input_file, hydro=True, mixt_n=0):
 
     # Set random generator state
     if read.random_state is not None:
+        print('loading random state from disk')
         with open(read.random_state, 'rb') as f:
             np.random.set_state(cpickle.load(f))
     elif read.seed is not None:
+        print('setting random seed')
         np.random.seed(int(read.seed))
 
     # Save random generator state
@@ -343,15 +344,17 @@ def go(input_file, hydro=True, mixt_n=0):
     offsets, list_of_neighbors = build_neighbor_list(r_vecs,L,r_cut,eps_bs)
     r_vecs_old = np.copy(r_vecs)
 
-    solver = DPStokes("periodic", "periodic", "single_wall")
-    solver.setParameters(dt=dt, Lx=L[0], Ly=L[1], zmin=0, zmax=4*a)
-    solver.initialize(
-        temperature=kT,
-        viscosity=eta,
-        hydrodynamicRadius=a,
-        numberParticles=Nblobs,
-        tolerance=5e-3,
-    )
+    if hydro:
+        from libMobility import DPStokes
+        solver = DPStokes("periodic", "periodic", "single_wall")
+        solver.setParameters(dt=dt, Lx=L[0], Ly=L[1], zmin=0, zmax=4*a)
+        solver.initialize(
+            temperature=kT,
+            viscosity=eta,
+            hydrodynamicRadius=a,
+            numberParticles=Nblobs,
+            tolerance=5e-3,
+        )
     
     name = output_name + '_' + structures_ID[0] + '.bin'
     if os.path.exists(name):
@@ -362,7 +365,7 @@ def go(input_file, hydro=True, mixt_n=0):
     print('saving to:', name)
 
     fcount = 0
-    for n in tqdm.trange(n_steps):
+    for n in tqdm.trange(n_steps, smoothing=0.1, mininterval=10*60):
         # print(n)
 
         time_s = n*dt
@@ -390,9 +393,6 @@ def go(input_file, hydro=True, mixt_n=0):
                                                     periodic_length=L,
                                                     kT=kT,
                                                     dt=dt,
-                                                    D = np.nan, # not used by func
-                                                    vx  = np.nan, # not used by func
-                                                    vy  = np.nan, # not used by func
                                                     bodies=bodies,
                                                     offsets=offsets,
                                                     list_of_neighbors=list_of_neighbors,

@@ -1,8 +1,9 @@
 import gen_start
 import main_chain_no_hydro
 import os
+import argparse
 
-def go(phi, L, t_save, dt, t_max, sigma, hydro, t_save2=0):
+def go(phi, L, t_save, dt, t_max, sigma, hydro, t_save2, suffix):
     gen_start.go(sigma, L, phi) # saves to f'suspensions/phi{phi}_L{L}.clones'
     structure_file = f'suspensions/phi{phi}_L{L}.clones'
 
@@ -12,7 +13,7 @@ def go(phi, L, t_save, dt, t_max, sigma, hydro, t_save2=0):
 
     # output_name = f'/store/cartera/2d_monolayer/hydro_dt{dt}'
     hydropart = 'hydro' if hydro else 'nohydro'
-    output_name = f'/store/cartera/2d_monolayer/{hydropart}'
+    output_name = f'/store/cartera/2d_monolayer/{hydropart}{suffix}'
 
     dat = f"""# Select implementation to compute M and M*f
 mobility_blobs_implementation            C++
@@ -49,7 +50,7 @@ debye_length_wall                        0.1395
 repulsion_strength_firm                  0.0163 #0.0331
 firm_delta                               1e-2
 
-#seed					 2
+seed					                 0
 
 # Set output name
 output_name                              {output_name}
@@ -65,4 +66,36 @@ structure ./blob.vertex {structure_file}"""
     main_chain_no_hydro.go(tempfilename, mixt_n=mixt_n, hydro=hydro)
 
     # delete temp.dat just to make sure
-    os.remove(tempfilename)
+    if os.path.isfile(tempfilename):
+        os.remove(tempfilename)
+
+    print('Finished.')
+
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--phi', type=float)
+    parser.add_argument('--L', type=float)
+    parser.add_argument('--t_save', type=float)
+    parser.add_argument('--dt', type=float)
+    parser.add_argument('--t_max', type=float)
+    parser.add_argument('--sigma', type=float)
+    parser.add_argument('--hydro', action='store_true')
+    parser.add_argument('--nohydro', dest='hydro', action='store_false')
+    parser.add_argument('--t_save2', type=float, default=0)
+    parser.add_argument('--suffix', type=str, default='')
+
+    args = parser.parse_args()
+
+    go(
+        phi     = args.phi,
+        L       = args.L,
+        t_save  = args.t_save,
+        dt      = args.dt,
+        t_max   = args.t_max,
+        sigma   = args.sigma,
+        hydro   = args.hydro,
+        t_save2 = args.t_save2,
+        suffix  = args.suffix,
+    )
