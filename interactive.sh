@@ -1,1 +1,0 @@
-srun --job-name="interactive" --partition=gpu --cpus-per-task=1 --gres="gpu:1" --nodes=1 --ntasks=1 --time 08-00:00:00 --pty bash

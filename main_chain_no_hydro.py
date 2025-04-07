@@ -57,7 +57,7 @@ import os, struct
 ##########################################################################################
 def Calc_F(r_vecs, FT_calc, bodies, offsets, list_of_neighbors):
     FT = FT_calc(bodies, r_vecs, offsets, list_of_neighbors)
-    return FT[::2,:]
+    return FT[::2,:] # I guess "::2" is because it is rows of forces, torques, forces, torques etc
 
 #'float64[:,:],float64[:,:],float64[:,:],float64,float64,float64,int32',
 @njit(parallel=True, fastmath=True)
@@ -222,7 +222,7 @@ def build_neighbor_list(r_vectors,L,r_cut,eps_bs):
     #print('other shit : ' + str((end - start)))
     return offsets, list_of_neighbors
 
-def go(input_file, hydro=True, mixt_n=0):
+def go(input_file, hydro=True, mixt_n=0, xy_potential_confinement=False, xy_potential_width=None, z_potential_confinement=False):
 
     # Read input file
     read = read_input.ReadInput(input_file)
@@ -320,23 +320,41 @@ def go(input_file, hydro=True, mixt_n=0):
 
     total_rej = 0
 
+    calculation_params = dict(
+        g=read.g,
+        theta=0.0,
+        repulsion_strength_firm=repulsion_strength_delta,
+        debye_length_firm=debye_length_delta,
+        firm_delta=firm_delta,
+        repulsion_strength_wall=read.repulsion_strength_wall,
+        debye_length_wall=read.debye_length_wall,
+        repulsion_strength=read.repulsion_strength,
+        debye_length=read.debye_length,
+        periodic_length=read.periodic_length,
+        potential_width=read.periodic_length,
+        a=a,
+        kT=kT,
+        gravity=True,
+        wall=True,
+    )
 
+    if xy_potential_confinement:
+        calculation_params['xy_potential_confinement'] = True
+        calculation_params['xy_potential_width'] = xy_potential_width
 
-    FT_calc = partial(multi_bodies_functions.force_torque_calculator_sort_by_bodies,
-                    g=read.g,
-                    theta=0.0,
-                    repulsion_strength_firm=repulsion_strength_delta,
-                    debye_length_firm=debye_length_delta,
-                    firm_delta=firm_delta,
-                    repulsion_strength_wall=read.repulsion_strength_wall,
-                    debye_length_wall=read.debye_length_wall,
-                    repulsion_strength=read.repulsion_strength,
-                    debye_length=read.debye_length,
-                    periodic_length=read.periodic_length,
-                    a=a)
+    if z_potential_confinement:
+        calculation_params['z_potential_confinement'] = True
+        calculation_params['gravity'] = False
+        calculation_params['wall'] = False
+        calculation_params['z_trap_width'] = a/2
+
+        assert xy_potential_confinement, 'must have open/open in x/y in order to have open in z'
+
+    FT_calc = partial(multi_bodies_functions.force_torque_calculator_sort_by_bodies, **calculation_params)
 
 
     r_vecs = np.array([b.location for b in bodies])
+    print('xy min max', r_vecs[:, 0].min(), r_vecs[:, 0].max(), r_vecs[:, 1].min(), r_vecs[:, 1].max())
     W_old = None
 
     r_cut = 4.0*a
@@ -345,16 +363,42 @@ def go(input_file, hydro=True, mixt_n=0):
     r_vecs_old = np.copy(r_vecs)
 
     if hydro:
-        from libMobility import DPStokes
-        solver = DPStokes("periodic", "periodic", "single_wall")
-        solver.setParameters(dt=dt, Lx=L[0], Ly=L[1], zmin=0, zmax=4*a)
-        solver.initialize(
-            temperature=kT,
-            viscosity=eta,
-            hydrodynamicRadius=a,
-            numberParticles=Nblobs,
-            tolerance=5e-3,
-        )
+        if z_potential_confinement:
+            from libMobility import NBody
+            solver = NBody("open", "open", "open")
+            solver.setParameters()
+            solver.initialize( # NperBatch * Nbatch != numberParticles
+                temperature=kT,
+                viscosity=eta,
+                hydrodynamicRadius=a,
+                numberParticles=Nblobs,
+                tolerance=5e-3,
+            )
+        elif xy_potential_confinement:
+            from libMobility import NBody
+            solver = NBody("open", "open", "single_wall")
+            solver.setParameters()
+            solver.initialize( # NperBatch * Nbatch != numberParticles
+                temperature=kT,
+                viscosity=eta,
+                hydrodynamicRadius=a,
+                numberParticles=Nblobs,
+                tolerance=5e-3,
+            )
+        else:
+            from libMobility import DPStokes
+            solver = DPStokes("periodic", "periodic", "single_wall")
+            assert L[0] > 0
+            assert L[1] > 0
+            print(dt, L, 4*a)
+            solver.setParameters(Lx=L[0], Ly=L[1], zmin=0, zmax=4*a)
+            solver.initialize(
+                temperature=kT,
+                viscosity=eta,
+                hydrodynamicRadius=a,
+                numberParticles=Nblobs,
+                tolerance=5e-3,
+            )
     
     name = output_name + '_' + structures_ID[0] + '.bin'
     if os.path.exists(name):
@@ -364,15 +408,24 @@ def go(input_file, hydro=True, mixt_n=0):
         
     print('saving to:', name)
 
+    z_sum    = 0
+    z_sq_sum = 0
+    z_n      = 0
+
     fcount = 0
-    for n in tqdm.trange(n_steps, smoothing=0.1, mininterval=10*60):
+    for n in (progress := tqdm.trange(n_steps, smoothing=0.1, mininterval=2*60)):
         # print(n)
+        # if n == 10:
+        #     progress.mininterval = 10*60
+        #     progress.refresh()
+
 
         time_s = n*dt
         # print(time_s)
         t0 = time.time()
         # print('USING BULLSHIT 2D NO HYDRO THING!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!')
 
+        # print('positions', r_vecs)
 
         # if hydro condition can be here
         if not hydro:
@@ -415,6 +468,7 @@ def go(input_file, hydro=True, mixt_n=0):
             # print("+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++")
             r_vecs_per = nb_put_r_vecs_in_periodic_box(r_vecs, L, Nblobs)
             offsets, list_of_neighbors = build_neighbor_list(r_vecs_per,L,r_cut,eps_bs)
+            # print(list_of_neighbors)
             #for k in range(4):
             #    print(list_of_neighbors[offsets[k]:offsets[k+1]])
             dt1 = time.time() - t0
@@ -440,10 +494,16 @@ def go(input_file, hydro=True, mixt_n=0):
                 status = 'ab'
             with open(name, status, buffering=1024*1024) as f_ID:
                 for j in range(Nblobs):
+                    # s = struct.pack('fff', r_vecs[j,0], r_vecs[j,1], time_s)
                     s = struct.pack('fff', r_vecs[j,0], r_vecs[j,1], time_s)
                     f_ID.write(s)
 
+            z_sum    += r_vecs[j, 2]
+            z_sq_sum += r_vecs[j, 2]**2
+            z_n      += 1
 
+    print()
+    print(f'z = {z_sum/z_n} +- {np.sqrt(z_sq_sum/z_n - (z_sum/z_n)**2)}')
 
 if __name__ == '__main__':
     # Get command line arguments

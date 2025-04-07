@@ -135,6 +135,7 @@ def blob_external_force(r_vectors, *args, **kwargs):
   b = debye_length_wall
   '''
   f = np.zeros(3)
+  print('adding external force python')
 
   # Get parameters from arguments
   blob_mass = kwargs.get('blob_mass')
@@ -167,7 +168,7 @@ def blob_external_force(r_vectors, *args, **kwargs):
   return f
 
 @njit(parallel=True, fastmath=True)
-def blob_external_force_numba(r_vectors, blob_radius, g, theta, repulsion_strength_firm, debye_length_firm_in, firm_delta):
+def blob_external_force_wall_numba(r_vectors, blob_radius, repulsion_strength_firm, debye_length_firm_in, firm_delta):
   '''
   This function compute the external force acting on a
   single blob. It returns an array with shape (N, 3).
@@ -177,24 +178,86 @@ def blob_external_force_numba(r_vectors, blob_radius, g, theta, repulsion_streng
   f = np.zeros((N, 3))
 
   debye_length_firm = 0.5*debye_length_firm_in
-  # Add gravity
-  #f[:,0] += g * np.sin(theta)
-  #f[:,2] += -g * np.cos(theta)
-
-  if theta is None:
-      theta = 0.0
-  grav_array = -g * np.array([-np.sin(theta), 0., np.cos(theta)])
   
   # Add wall interaction
   for i in prange(N):
     h = r_vectors[i,2]
-    f[i,:] += grav_array
     if h > blob_radius*(1.0-firm_delta):
       f[i,2] += (repulsion_strength_firm / debye_length_firm) * np.exp(-(h-blob_radius*(1.0-firm_delta))/debye_length_firm)
     else:
       f[i,2] += (repulsion_strength_firm / debye_length_firm)
       
   return f
+
+@njit(parallel=True, fastmath=True)
+def blob_external_force_gravity_numba(r_vectors, g, theta):
+  '''
+  This function compute the external force acting on a
+  single blob. It returns an array with shape (N, 3).
+  '''
+
+#   N = r_vectors.size // 3
+#   r_vectors = r_vectors.reshape((N, 3))
+#   f = np.zeros((N, 3))
+
+
+  if theta is None:
+      theta = 0.0
+  grav_array = -g * np.array([-np.sin(theta), 0., np.cos(theta)])
+
+  return grav_array # it should broadcast up to the right shape
+#   f = np.zeros((N, 3))
+  
+#   # Add wall interaction
+# #   for i in prange(N):
+# #     f[i,:] += grav_array # 
+#   f[i,:] += grav_array # 
+      
+#   return f
+
+  
+@njit(parallel=True, fastmath=True)
+def blob_external_force_xy_potential_confinement_numba(r_vectors, blob_radius, kT, potential_width):
+  '''
+  This function compute the external force acting on a
+  single blob. It returns an array with shape (N, 3).
+  '''
+  assert np.isfinite(kT)
+
+  N = r_vectors.size // 3
+  r_vectors = r_vectors.reshape((N, 3))
+  f = np.zeros((N, 3))
+  
+  for i in prange(N):
+    r = r_vectors[i, :]
+
+    if -potential_width[0]/2 <= r[0] <= potential_width[0]/2:
+      f_x = 0
+    else:
+      f_x = 2 * kT/blob_radius**2 * (r[0] - np.sign(r[0])*potential_width[0])
+
+    if -potential_width[1]/2 <= r[1] <= potential_width[1]/2:
+      f_y = 0
+    else:
+      f_y = 2 * kT/blob_radius**2 * (r[1] - np.sign(r[1])*potential_width[1])
+
+    f[i, :] += np.array([f_x, f_y, 0])
+      
+  return f
+
+@njit(fastmath=True)
+def blob_external_force_z_confinement_numba(r_vectors, blob_radius, kT, z0, z_trap_width):
+    #potential (z-z0)^2 * k_s/2
+    #force 2(z-z0) * k_s/2
+    # k_s = k_B T / z_trap_width**2    # https://link.aps.org/doi/10.1103/PhysRevE.95.012602 eq 1, z_trap_width === delta
+    
+    N = r_vectors.size // 3
+    r_vectors = r_vectors.reshape((N, 3))
+    f = np.zeros((N, 3))
+
+    f[:, 2] = - 2 * (r_vectors[:, 2] - z0) * kT / z_trap_width**2 / 2
+
+    return f
 
 
 def calc_one_blob_forces(r_vectors, *args, **kwargs):
@@ -494,7 +557,17 @@ def force_torque_calculator_sort_by_bodies(bodies, r_vectors, offsets, list_of_n
   # Compute one-blob forces (same function for all blobs)
   #fb = calc_one_blob_forces(r_vectors, blob_radius = blob_radius, blob_mass = blob_mass, *args, **kwargs)
   #start = time.time()
-  force_blobs += blob_external_force_numba(r_vectors, blob_radius, g, theta, repulsion_strength_firm, debye_length_firm, firm_delta)
+  if kwargs.get('wall'):  
+    force_blobs += blob_external_force_wall_numba(r_vectors, blob_radius, repulsion_strength_firm, debye_length_firm, firm_delta)
+
+  if kwargs.get('gravity'):                    
+    force_blobs += blob_external_force_gravity_numba(r_vectors, g, theta)
+  
+  if kwargs.get('xy_potential_confinement'):
+    force_blobs += blob_external_force_xy_potential_confinement_numba(r_vectors, blob_radius, kwargs['kT'], kwargs['xy_potential_width'])
+  
+  if kwargs.get('z_potential_confinement'):
+    force_blobs += blob_external_force_z_confinement_numba(r_vectors, blob_radius, kwargs['kT'], kwargs.get('z0', 0), kwargs['z_trap_width'])
   #end = time.time()
   #print('one blob : ' + str((end - start)))
 
@@ -538,6 +611,7 @@ def force_torque_calculator_sort_by_bodies(bodies, r_vectors, offsets, list_of_n
   #########################################################
   #start = time.time()
   nb_blob_force = blob_blob_force_numba(r_vectors, L, blob_radius, repulsion_strength_firm, debye_length_firm, firm_delta, repulsion_strength, debye_length, list_of_neighbors, offsets)
+#   print('blob blob force', nb_blob_force)
   force_blobs += nb_blob_force
   #end = time.time()
   #print('many blob : ' + str((end - start)))

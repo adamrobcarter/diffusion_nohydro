@@ -3,7 +3,7 @@ import tqdm
 
 # OMP_NUM_PROCS=1 OMP_PROC_BIND=true python main_chain_no_hydro.py --input-file input_L320_phi001.dat
 
-def go(sigma, L, phi):
+def go(sigma, L, phi, z_equals_zero=False):
     np.random.seed(0)
 
     # Parameters
@@ -28,7 +28,10 @@ def go(sigma, L, phi):
         while not newCircleFound:
             x = -L / 2.0 + L * np.random.rand()
             y = -L / 2.0 + L * np.random.rand()
-            z = r + np.random.exponential(kbt_over_mg_e)
+            if z_equals_zero:
+                z = 0
+            else:
+                z = r + np.random.exponential(kbt_over_mg_e)
 
             prevCirclesZ = circles[:i, 2]
             prevCirclesY = circles[:i, 1]

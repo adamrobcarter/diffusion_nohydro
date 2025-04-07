@@ -1,25 +1,72 @@
 import subprocess
 
-hydro = False
-phi = 0.114
-L = 320
-dt = 0.0125
-t_save = 16
-t_save2 = 0.5
-t_max = 2560
-# t_max = 2560000, # 2560000 is 711 hr
-# t_max = 25600, # test_mixt
-sigma = 2.972
-suffix = "_testslurm"
+hydro = True
 
-HYDROCOMMAND = 'conda run --name libm --live-stream python run.py --hydro'
+# phi = 0.01
+# phi = 0.016
+phi = 0.114
+L = 640
+sigma = 2.972
+
+t_save2 = 0
+t_save = 0.5
+t_max = 80000 # 22 hr
+# t_max = 80000/4 # 22 hr
+suffix = "_t0.5"
+
+# t_save2 = 0
+# t_max = 2560000 # 711 hr
+# # # t_save = 16
+# # # suffix = "_t16"
+# t_save = 64
+# suffix = "_t64"
+
+# t_save2 = 0
+# t_max = 1000 # /10 for phi > 0.01 please
+# # t_save = 16
+# # suffix = "_t16"
+# t_save = 0.5
+# suffix = "_t0.5"
+
+# xy_potential_confinement = False
+xy_potential_confinement = True
+
+# z_potential_confinement = False
+z_potential_confinement = True
+
+if xy_potential_confinement:
+    suffix += '_pot'
+if z_potential_confinement:
+    suffix += '_zconf'
+    assert xy_potential_confinement, 'must have open/open in x/y in order to have open in z'
+
+density = 4/3.14159 * phi / sigma**2
+N = L**2 * density
+num_rows_outputted = N * (t_max / t_save)
+filesize = num_rows_outputted * 3 * 4
+print(f'filesize will be {filesize/1e9:.1f}GB')
+assert filesize < 15e9, f'filesize will be {filesize/1e9:.1f}GB'
+
+HYDROCOMMAND = 'conda run --name libm --live-stream python run.py --hydro' # https://stackoverflow.com/a/72395091/1103752
 NOHYDROCOMMAND = 'python run.py --nohydro'
 command = HYDROCOMMAND if hydro else NOHYDROCOMMAND
+if xy_potential_confinement:
+    command += ' --xypotentialconfinement'
+if z_potential_confinement:
+    command += ' --zpotentialconfinement'
 hydrotext = 'hydro' if hydro else 'nohydro'
 partition = 'gpu' if hydro else 'std'
 gres = '#SBATCH --gres=gpu:1' if hydro else ''
+dt = 0.1 if hydro else 0.0125
 
-jobname = f'{hydrotext}-L{L}-phi{phi}'
+jobname = f'{hydrotext}_{phi}_L{L}{suffix}'
+
+
+fullcommand = f'{command} --phi {phi} --L {L} --dt {dt} --t_save {t_save} --t_save2 {t_save2} --t_max {t_max} --sigma {sigma} --suffix "{suffix}"'
+print('command:')
+print(fullcommand)
+# import sys
+# sys.exit()
 
 job = f"""#!/bin/bash
 
@@ -32,7 +79,7 @@ job = f"""#!/bin/bash
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=1
 {gres}
-#SBATCH --time=8-00:00:00
+#SBATCH --time=6-00:00:00
 
 set -e # stop on error
 
@@ -44,8 +91,7 @@ export OMP_NUM_THREADS=${{SLURM_CPUS_PER_TASK}}
 ## Move data (if necessary) and launch application
 ## (use 'srun' for launching mpi applications)
 cd ~/libm
-{command} --phi {phi} --L {L} --dt {dt} --t_save {t_save} --t_save2 {t_save2} --t_max {t_max} --sigma {sigma} --suffix "{suffix}"
-# https://stackoverflow.com/a/72395091/1103752
+{fullcommand}
 
 ## Finish gracefully
 exit 0

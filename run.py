@@ -3,9 +3,9 @@ import main_chain_no_hydro
 import os
 import argparse
 
-def go(phi, L, t_save, dt, t_max, sigma, hydro, t_save2, suffix):
-    gen_start.go(sigma, L, phi) # saves to f'suspensions/phi{phi}_L{L}.clones'
-    structure_file = f'suspensions/phi{phi}_L{L}.clones'
+def go(phi, L, t_save, dt, t_max, sigma, hydro, t_save2, suffix, xy_potential_confinement=False, z_potential_confinement=False):
+    gen_start.go(sigma, L, phi, z_equals_zero=z_potential_confinement) # saves to f'suspensions/phi{phi}_L{L}.clones'
+    structure_file = f'suspensions/phi{phi}_L{int(L)}.clones'
 
     n_steps = int(t_max / dt)
     n_save = int(t_save / dt)
@@ -14,6 +14,11 @@ def go(phi, L, t_save, dt, t_max, sigma, hydro, t_save2, suffix):
     # output_name = f'/store/cartera/2d_monolayer/hydro_dt{dt}'
     hydropart = 'hydro' if hydro else 'nohydro'
     output_name = f'/store/cartera/2d_monolayer/{hydropart}{suffix}'
+
+    xy_potential_width = 0
+    if xy_potential_confinement:
+        xy_potential_width = [L, L, 0]
+        L = 0
 
     dat = f"""# Select implementation to compute M and M*f
 mobility_blobs_implementation            C++
@@ -63,11 +68,12 @@ structure ./blob.vertex {structure_file}"""
     with open(tempfilename, 'w') as file:
         file.write(dat)
 
-    main_chain_no_hydro.go(tempfilename, mixt_n=mixt_n, hydro=hydro)
+    main_chain_no_hydro.go(tempfilename, mixt_n=mixt_n, hydro=hydro, xy_potential_confinement=xy_potential_confinement, xy_potential_width=xy_potential_width,
+                           z_potential_confinement=z_potential_confinement)
 
     # delete temp.dat just to make sure
-    if os.path.isfile(tempfilename):
-        os.remove(tempfilename)
+    # if os.path.isfile(tempfilename):
+    #     os.remove(tempfilename)
 
     print('Finished.')
 
@@ -76,7 +82,7 @@ structure ./blob.vertex {structure_file}"""
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--phi', type=float)
-    parser.add_argument('--L', type=float)
+    parser.add_argument('--L', type=int)
     parser.add_argument('--t_save', type=float)
     parser.add_argument('--dt', type=float)
     parser.add_argument('--t_max', type=float)
@@ -85,6 +91,8 @@ if __name__ == '__main__':
     parser.add_argument('--nohydro', dest='hydro', action='store_false')
     parser.add_argument('--t_save2', type=float, default=0)
     parser.add_argument('--suffix', type=str, default='')
+    parser.add_argument('--xypotentialconfinement', action='store_true')
+    parser.add_argument('--zpotentialconfinement', action='store_true')
 
     args = parser.parse_args()
 
@@ -98,4 +106,6 @@ if __name__ == '__main__':
         hydro   = args.hydro,
         t_save2 = args.t_save2,
         suffix  = args.suffix,
+        xy_potential_confinement = args.xypotentialconfinement,
+        z_potential_confinement = args.zpotentialconfinement,
     )
