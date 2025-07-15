@@ -52,7 +52,10 @@ print(sys.executable)
 
 import tqdm
 import os, struct
+import looptiming
 
+
+BURN_IN_SECONDS = 2.0
 
 ##########################################################################################
 def Calc_F(r_vecs, FT_calc, bodies, offsets, list_of_neighbors):
@@ -98,25 +101,39 @@ def RFD(solver, r_vecs):
     return (MW_1 - MW_2)/delta
 
 
-def stochastic_trap_hydro(r_vecs,FT_calc,kT,dt,bodies,offsets,list_of_neighbors, periodic_length, solver):
+def stochastic_trap_hydro(r_vecs,FT_calc,kT,dt,bodies,offsets,list_of_neighbors, periodic_length, solver, loop_timer):
 
     Nb = r_vecs.shape[0]
 
     r_vecs_periodic = nb_put_r_vecs_in_periodic_box(r_vecs, periodic_length, Nb)
+
+    loop_timer.start('Calc_F')
     F = Calc_F(r_vecs_periodic, FT_calc, bodies, offsets, list_of_neighbors)
+    loop_timer.stop('Calc_F')
 
     solver.setPositions(r_vecs)
+    
+    loop_timer.start('Mdot')
     MF, _ = solver.Mdot(F)
+    loop_timer.stop('Mdot')
 
+    loop_timer.start('sqrtMdotW')
     MW, _ = solver.sqrtMdotW()
+    loop_timer.stop('sqrtMdotW')
 
+    loop_timer.start('RFD')
     div_M = RFD(solver, r_vecs)
+    loop_timer.stop('RFD')
 
     r_predict = r_vecs + dt*MF  + np.sqrt(2.0*kT*dt)*MW + kT*dt*div_M
 
     r_pred_periodic = nb_put_r_vecs_in_periodic_box(r_predict, periodic_length, Nb)
+    loop_timer.start('Calc_F2')
     F_pred = Calc_F(r_pred_periodic, FT_calc, bodies, offsets, list_of_neighbors)
+    loop_timer.stop('Calc_F2')
+    loop_timer.start('Mdot2')
     MF_pred, _ = solver.Mdot(F_pred)
+    loop_timer.stop('Mdot2')
 
     return r_vecs + 0.5*dt*(MF + MF_pred) + np.sqrt(2.0*kT*dt)*MW + kT*dt*div_M
 
@@ -132,21 +149,13 @@ def nb_put_r_vecs_in_periodic_box(r_vecs_np, L, Nb):
                     r_vecs[k,i] -= L[i]
     return r_vecs
 
-def Update_Bodies_With_Hydro(r_vecs_np, W_old, FT_calc, periodic_length, kT, dt, bodies, offsets, list_of_neighbors, solver):
+def Update_Bodies_With_Hydro(r_vecs_np, W_old, FT_calc, periodic_length, kT, dt, bodies, offsets, list_of_neighbors, solver, loop_timer):
     '''
     Calculate Brownian Dynamics WITH hydro
     '''
 
-    ####################
-    start = time.time()
-
     # r_new = EM_hydro(r_vecs_np,FT_calc,kT,dt,bodies, offsets, list_of_neighbors, periodic_length, solver) #this should be r_vecs, not r_out!!!
-    r_new = stochastic_trap_hydro(r_vecs_np,FT_calc,kT,dt,bodies, offsets, list_of_neighbors, periodic_length, solver) #this should be r_vecs, not r_out!!!
-    end = time.time()
-    # print('evolve rvecs : ' + str((end - start)))
-    #################################################################################
-
-    # print('*performace mode* - no error or jump checks!!')
+    r_new = stochastic_trap_hydro(r_vecs_np,FT_calc,kT,dt,bodies, offsets, list_of_neighbors, periodic_length, solver, loop_timer) #this should be r_vecs, not r_out!!!
 
     return r_new, W_old
 
@@ -222,10 +231,12 @@ def build_neighbor_list(r_vectors,L,r_cut,eps_bs):
     #print('other shit : ' + str((end - start)))
     return offsets, list_of_neighbors
 
-def go(input_file, hydro=True, mixt_n=0, xy_potential_confinement=False, xy_potential_width=None, z_potential_confinement=False):
+def go(input_file, hydro=True, mixt_n=0, xy_potential_confinement=False, xy_potential_width=None, z_potential_confinement=False,
+       save_data=True, theta=0.0):
 
     # Read input file
     read = read_input.ReadInput(input_file)
+    print('input file', input_file)
 
     # Set some variables for the simulation
     eta = read.eta
@@ -239,17 +250,21 @@ def go(input_file, hydro=True, mixt_n=0, xy_potential_confinement=False, xy_pote
     subprocess.call(["cp", input_file, output_name + '_' + structures_ID[0] + '.inputfile'])
 
     # Set random generator state
-    if read.random_state is not None:
-        print('loading random state from disk')
-        with open(read.random_state, 'rb') as f:
-            np.random.set_state(cpickle.load(f))
-    elif read.seed is not None:
-        print('setting random seed')
-        np.random.seed(int(read.seed))
+    if True:
+        print('using random seed')
+        np.random.seed() # with no arguament, np will randomise the seed
+    else:
+        if read.random_state is not None:
+            print('loading random state from disk')
+            with open(read.random_state, 'rb') as f:
+                np.random.set_state(cpickle.load(f))
+        elif read.seed is not None:
+            print('setting random seed', int(read.seed))
+            np.random.seed(int(read.seed))
 
-    # Save random generator state
-    with open(output_name + '_' + structures_ID[0] + '.random_state', 'wb') as f:
-        cpickle.dump(np.random.get_state(), f)
+        # Save random generator state
+        with open(output_name + '_' + structures_ID[0] + '.random_state', 'wb') as f:
+            cpickle.dump(np.random.get_state(), f)
 
     # Create rigid bodies
     bodies = []
@@ -322,7 +337,7 @@ def go(input_file, hydro=True, mixt_n=0, xy_potential_confinement=False, xy_pote
 
     calculation_params = dict(
         g=read.g,
-        theta=0.0,
+        theta=theta,
         repulsion_strength_firm=repulsion_strength_delta,
         debye_length_firm=debye_length_delta,
         firm_delta=firm_delta,
@@ -352,6 +367,8 @@ def go(input_file, hydro=True, mixt_n=0, xy_potential_confinement=False, xy_pote
 
     FT_calc = partial(multi_bodies_functions.force_torque_calculator_sort_by_bodies, **calculation_params)
 
+    metadata = dict(calculation_params) # some of these kT, a etc want renaming for my system
+    metadata['dt'] = dt
 
     r_vecs = np.array([b.location for b in bodies])
     print('xy min max', r_vecs[:, 0].min(), r_vecs[:, 0].max(), r_vecs[:, 1].min(), r_vecs[:, 1].max())
@@ -400,20 +417,28 @@ def go(input_file, hydro=True, mixt_n=0, xy_potential_confinement=False, xy_pote
                 tolerance=5e-3,
             )
     
-    name = output_name + '_' + structures_ID[0] + '.bin'
-    if os.path.exists(name):
-        # input(f'Exit now if you do not want to delete {name}')
-        os.remove(name)
-        print('deleted')
+    name = output_name + '_' + structures_ID[0] + '.npz'
+    if save_data:
+        if os.path.exists(name):
+            # input(f'Exit now if you do not want to delete {name}')
+            os.remove(name)
+            print('deleted')
+        print('saving to:', name)
+    else:
+        print('warning: not saving data')
         
-    print('saving to:', name)
 
-    z_sum    = 0
-    z_sq_sum = 0
-    z_n      = 0
+    
+    skip_timesteps = BURN_IN_SECONDS / dt
+    skip_saves = skip_timesteps / n_save
+    num_output_rows = Nblobs * int(n_steps / n_save - 1 - skip_saves)
+    particles = np.full((num_output_rows, 5), np.nan)
+    print(f'particles array size, {particles.nbytes/1e9:.1f}GB')
 
-    fcount = 0
-    for n in (progress := tqdm.trange(n_steps, smoothing=0.1, mininterval=2*60)):
+    loop_timer = looptiming.LoopTiming()
+    t_start = time.time()
+
+    for n in (progress := tqdm.trange(n_steps, smoothing=0.1, mininterval=10)):
         # print(n)
         # if n == 10:
         #     progress.mininterval = 10*60
@@ -428,6 +453,7 @@ def go(input_file, hydro=True, mixt_n=0, xy_potential_confinement=False, xy_pote
         # print('positions', r_vecs)
 
         # if hydro condition can be here
+        loop_timer.start('update bodies')
         if not hydro:
             r_vecs, W_old = Update_Bodies_No_Hydro_2D(r_vecs, W_old, FT_calc,
                                                       D=0.04, #0.0444, #0.017, #
@@ -449,8 +475,9 @@ def go(input_file, hydro=True, mixt_n=0, xy_potential_confinement=False, xy_pote
                                                     bodies=bodies,
                                                     offsets=offsets,
                                                     list_of_neighbors=list_of_neighbors,
-                                                    solver=solver) #D=0.0444 for experiments
+                                                    solver=solver, loop_timer=loop_timer)
 
+        loop_timer.stop('update bodies')
 
         disps = np.sqrt(np.sum((r_vecs - r_vecs_old)**2, axis=1))
         max_disp = np.max(disps)
@@ -477,43 +504,21 @@ def go(input_file, hydro=True, mixt_n=0, xy_potential_confinement=False, xy_pote
         # print(("walltime for time step : %s" % dt1))
         #print("min(z): "+str(np.min(r_vecs[:,2])/a-1))
 
-        if ((n % n_save == 0) or (n % n_save == mixt_n)) and (time_s > 2.0):
-            fcount += 1
-            # if n == 0:
-            #     status = 'w'
-            # else:
-            #     status = 'a'
-            # with open(name, status) as f_ID:
-            #     for j in range(Nblobs):
-            #         f_ID.write('%s %s %s\n' % (r_vecs[j,0],
-            #                                    r_vecs[j,1],
-            #                                    fcount))
-            if n == 0:
-                status = 'wb'
-            else:
-                status = 'ab'
-            with open(name, status, buffering=1024*1024) as f_ID:
-                for j in range(Nblobs):
-                    # s = struct.pack('fff', r_vecs[j,0], r_vecs[j,1], time_s)
-                    s = struct.pack('fff', r_vecs[j,0], r_vecs[j,1], time_s)
-                    f_ID.write(s)
+        if ((n % n_save == 0) or (n % n_save == mixt_n)) and (time_s > BURN_IN_SECONDS):
+            frame = int((n - skip_timesteps) / n_save) - 1
+            row_i = frame * Nblobs
+            assert row_i >= 0
 
-            z_sum    += r_vecs[j, 2]
-            z_sq_sum += r_vecs[j, 2]**2
-            z_n      += 1
+            for j in range(Nblobs):
+                particles[row_i+j, [0, 1, 2]] = r_vecs[j,[0, 1, 2]] # Xs is [x0, y0, z0, x1, y1, z1, ...]
+                particles[row_i+j, 3] = frame
+                particles[row_i+j, 4] = j # particle ID
 
-    print()
-    print(f'z = {z_sum/z_n} +- {np.sqrt(z_sq_sum/z_n - (z_sum/z_n)**2)}')
+    t_end = time.time()
+    metadata['computation_time'] = t_end-t_start
 
-if __name__ == '__main__':
-    # Get command line arguments
-    parser = argparse.ArgumentParser(
-        description='Run a multi-body simulation and save trajectory.')
-    parser.add_argument('--input-file', dest='input_file', type=str,
-                        default='data.main', help='name of the input file')
-    parser.add_argument('--print-residual', action='store_true',
-                        help='print gmres and lanczos residuals')
-    args = parser.parse_args()
-    input_file = args.input_file
+    if save_data:
+        np.savez(name, particles=particles, **metadata)
+        print(f'saved {name}')
 
-    go(input_file)
+    loop_timer.print_results()

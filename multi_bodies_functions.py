@@ -203,6 +203,7 @@ def blob_external_force_gravity_numba(r_vectors, g, theta):
 
   if theta is None:
       theta = 0.0
+
   grav_array = -g * np.array([-np.sin(theta), 0., np.cos(theta)])
 
   return grav_array # it should broadcast up to the right shape

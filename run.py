@@ -2,8 +2,11 @@ import gen_start
 import main_chain_no_hydro
 import os
 import argparse
+import numpy as np
+import sys
 
-def go(phi, L, t_save, dt, t_max, sigma, hydro, t_save2, suffix, xy_potential_confinement=False, z_potential_confinement=False):
+def go(phi, L, t_save, dt, t_max, sigma, hydro, t_save2, suffix, xy_potential_confinement=False, z_potential_confinement=False, save_data=True, theta=0.0,
+       jobname=None):
     gen_start.go(sigma, L, phi, z_equals_zero=z_potential_confinement) # saves to f'suspensions/phi{phi}_L{L}.clones'
     structure_file = f'suspensions/phi{phi}_L{int(L)}.clones'
 
@@ -14,6 +17,9 @@ def go(phi, L, t_save, dt, t_max, sigma, hydro, t_save2, suffix, xy_potential_co
     # output_name = f'/store/cartera/2d_monolayer/hydro_dt{dt}'
     hydropart = 'hydro' if hydro else 'nohydro'
     output_name = f'/store/cartera/2d_monolayer/{hydropart}{suffix}'
+
+    if theta:
+        assert not xy_potential_confinement
 
     xy_potential_width = 0
     if xy_potential_confinement:
@@ -38,7 +44,7 @@ g                                        0.0592
 blob_radius                              {sigma/2}
 
 # Stochastic parameters
-kT                                       0.0041419464
+kT                                       0.0041419464 # 300K
 solver_tolerance                         1.0e-4
 
 periodic_length                          {float(L)}   {float(L)}    0.0
@@ -64,12 +70,14 @@ output_name                              {output_name}
 # *.vertex and *.clones files
 structure ./blob.vertex {structure_file}"""
     
-    tempfilename = 'temp.dat'
+    tempfilename = f'temp-{jobname}.dat'
     with open(tempfilename, 'w') as file:
         file.write(dat)
 
+    theta *= np.pi / 180
+
     main_chain_no_hydro.go(tempfilename, mixt_n=mixt_n, hydro=hydro, xy_potential_confinement=xy_potential_confinement, xy_potential_width=xy_potential_width,
-                           z_potential_confinement=z_potential_confinement)
+                           z_potential_confinement=z_potential_confinement, save_data=save_data, theta=theta)
 
     # delete temp.dat just to make sure
     # if os.path.isfile(tempfilename):
@@ -81,20 +89,25 @@ structure ./blob.vertex {structure_file}"""
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--phi', type=float)
-    parser.add_argument('--L', type=int)
-    parser.add_argument('--t_save', type=float)
-    parser.add_argument('--dt', type=float)
-    parser.add_argument('--t_max', type=float)
-    parser.add_argument('--sigma', type=float)
-    parser.add_argument('--hydro', action='store_true')
+    parser.add_argument('--phi',     type=float, default=0.114)
+    parser.add_argument('--L',       type=int,   default=640)
+    parser.add_argument('--t_save',  type=float, default=0.5)
+    parser.add_argument('--dt',      type=float)
+    parser.add_argument('--t_max',   type=float, default=100)
+    parser.add_argument('--sigma',   type=float, default=2.972)
+    parser.add_argument('--hydro',   action='store_true')
     parser.add_argument('--nohydro', dest='hydro', action='store_false')
     parser.add_argument('--t_save2', type=float, default=0)
-    parser.add_argument('--suffix', type=str, default='')
+    parser.add_argument('--suffix',  type=str,   default='')
     parser.add_argument('--xypotentialconfinement', action='store_true')
     parser.add_argument('--zpotentialconfinement', action='store_true')
+    parser.add_argument('--nosave', action='store_true')
+    parser.add_argument('--theta',  type=float, default=0.0)
+    parser.add_argument('--jobname',  type=str, default=0.0)
 
     args = parser.parse_args()
+
+    print(' '.join(sys.argv))
 
     go(
         phi     = args.phi,
@@ -108,4 +121,7 @@ if __name__ == '__main__':
         suffix  = args.suffix,
         xy_potential_confinement = args.xypotentialconfinement,
         z_potential_confinement = args.zpotentialconfinement,
+        save_data = not args.nosave,
+        theta    = args.theta,
+        jobname = args.jobname,
     )

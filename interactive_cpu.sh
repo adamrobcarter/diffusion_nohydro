@@ -1,1 +1,0 @@
-srun --job-name="interactive cpu" --partition=std --cpus-per-task=1 --nodes=1 --ntasks=1 --time 06:00:00 --pty bash
