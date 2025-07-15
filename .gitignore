@@ -1,5 +1,5 @@
 slurm*.out
-temp.dat
+temp*.dat
 __pycache__/*
 suspensions/*
 job.temp.sh

@@ -22,7 +22,7 @@ def go(sigma, L, phi, z_equals_zero=False):
 
     circles = np.zeros((nCircles, 7))
 
-    for i in tqdm.trange(nCircles):
+    for i in tqdm.trange(nCircles, mininterval=1, desc='generating inital state'):
         newCircleFound = False
 
         while not newCircleFound:
